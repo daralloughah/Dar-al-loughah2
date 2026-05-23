@@ -85,7 +85,8 @@
       };
     });
 
-    words.sort((a, b) => b.count - a.count || a.word.localeCompare(b.word, "ar"));
+        words.sort((a, b) => b.count - a.count || (a.word < b.word ? -1 : a.word > b.word ? 1 : 0));
+
     words.forEach((w, i) => { w.rank = i + 1; w.share = keptTotal ? (w.count / keptTotal) * 100 : 0; });
 
     const unique = words.length;
