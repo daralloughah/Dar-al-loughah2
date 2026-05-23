@@ -1,5 +1,5 @@
 /* ============================================================
-   DAR AL LOUGHAH — app.js  (v4 : correctif perf + forme exacte)
+   DAR AL LOUGHAH — app.js  (v5 : loader + erreurs + tri rapide)
    Dépend de : stopwords.js, engine.js (, pdfreader.js)
    ============================================================ */
 (function () {
@@ -7,6 +7,9 @@
 
   const PAGE = 60;
   const LS_KEY = "dar_analyses_v1";
+
+  // Comparateur arabe RAPIDE (par code-point, pas localeCompare)
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
   const $ = (id) => document.getElementById(id);
   const pasteArea  = $("pasteArea");
@@ -31,7 +34,7 @@
   const emptyState = $("emptyState");
 
   let currentResult = null;
-  let currentExports = null;
+  let currentExports = null;   // calculé à la demande (lazy)
   let view = [];
   let shown = 0;
   let currentTitle = "";
@@ -41,6 +44,7 @@
   const exportBar   = injectExportBar();
   const savedBox    = injectSavedBox();
   const toastEl     = injectToast();
+  const loader      = injectLoader();
 
   function injectStyles() {
     const css = `
@@ -84,9 +88,19 @@
       background:linear-gradient(160deg,var(--gold-soft),var(--gold-deep));
       color:var(--night-0);font-family:var(--ff-ui);font-weight:600;font-size:14px;
       padding:12px 22px;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.5);
-      opacity:0;pointer-events:none;transition:.3s;z-index:50}
+      opacity:0;pointer-events:none;transition:.3s;z-index:80;max-width:90%;text-align:center}
     .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-    .processing{opacity:.5;pointer-events:none}`;
+    .toast.err{background:linear-gradient(160deg,#e08a6a,#a23b22);color:#fff}
+    .processing{opacity:.5;pointer-events:none}
+    .loader{position:fixed;inset:0;z-index:90;display:none;
+      flex-direction:column;align-items:center;justify-content:center;gap:18px;
+      background:rgba(6,10,26,.82);backdrop-filter:blur(4px)}
+    .loader.show{display:flex}
+    .loader .ring{width:54px;height:54px;border-radius:50%;
+      border:3px solid rgba(212,175,55,.18);border-top-color:var(--gold);
+      animation:spin .8s linear infinite;filter:drop-shadow(0 0 10px rgba(212,175,55,.5))}
+    .loader .ltxt{font-family:var(--ff-disp);color:var(--gold-soft);font-size:15px;letter-spacing:.4px}
+    @keyframes spin{to{transform:rotate(360deg)}}`;
     const s = document.createElement("style");
     s.textContent = css;
     document.head.appendChild(s);
@@ -132,6 +146,27 @@
     return el;
   }
 
+  function injectLoader() {
+    const el = document.createElement("div");
+    el.className = "loader";
+    el.innerHTML = `<div class="ring"></div><div class="ltxt" id="loaderTxt">Analyse en cours…</div>`;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function showLoader(msg) {
+    $("loaderTxt").textContent = msg || "Analyse en cours…";
+    loader.classList.add("show");
+  }
+  function hideLoader() { loader.classList.remove("show"); }
+
+  // Exécute une tâche lourde APRÈS que le loader soit réellement affiché
+  function runHeavy(fn) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      setTimeout(fn, 0);
+    }));
+  }
+
   /* ============================================================
      LECTURE FICHIER .txt / .pdf
      ============================================================ */
@@ -143,18 +178,16 @@
     const isPdf = /\.pdf$/i.test(f.name) || f.type === "application/pdf";
 
     if (isPdf) {
-      if (!window.DarPDF) { toast("Module PDF non chargé"); return; }
-      btnAnalyze.classList.add("processing");
-      fileName.textContent = f.name + " — extraction…";
-
+      if (!window.DarPDF) { toast("Module PDF non chargé", true); return; }
+      showLoader("Extraction du PDF…");
       window.DarPDF.extractText(f, (page, total) => {
-        fileName.textContent = `${f.name} — page ${page}/${total}…`;
+        $("loaderTxt").textContent = `Extraction du PDF… page ${page}/${total}`;
       }).then((text) => {
+        hideLoader();
         pasteArea.value = text;
-        btnAnalyze.classList.remove("processing");
         if (!text.trim()) {
           fileName.textContent = f.name + " — aucun texte trouvé";
-          toast("PDF scanné ? Aucun texte (OCR nécessaire)");
+          toast("PDF scanné ? Aucun texte (OCR nécessaire)", true);
         } else {
           fileName.textContent =
             `${f.name} ✓ (${text.length.toLocaleString("fr-FR")} caractères)`;
@@ -162,17 +195,21 @@
         }
       }).catch((err) => {
         console.error(err);
-        btnAnalyze.classList.remove("processing");
+        hideLoader();
         fileName.textContent = f.name + " — échec de lecture";
-        toast("Impossible de lire ce PDF");
+        toast("Impossible de lire ce PDF", true);
       });
       return;
     }
 
-    fileName.textContent = f.name;
+    // .txt
+    fileName.textContent = f.name + " — lecture…";
     const reader = new FileReader();
-    reader.onload = () => { pasteArea.value = reader.result; };
-    reader.onerror = () => toast("Erreur de lecture du fichier");
+    reader.onload = () => {
+      pasteArea.value = reader.result;
+      fileName.textContent = `${f.name} ✓ — clique sur Analyser`;
+    };
+    reader.onerror = () => { fileName.textContent = f.name + " — erreur"; toast("Erreur de lecture du fichier", true); };
     reader.readAsText(f, "UTF-8");
   });
 
@@ -183,12 +220,13 @@
 
   function runAnalyze() {
     const text = pasteArea.value.trim();
-    if (!text) { toast("Colle ou importe un texte d'abord"); return; }
+    if (!text) { toast("Colle ou importe un texte d'abord", true); return; }
 
+    showLoader("Analyse en cours…");
     btnAnalyze.classList.add("processing");
     btnAnalyze.textContent = "Analyse en cours…";
 
-    setTimeout(() => {
+    runHeavy(() => {
       try {
         const result = window.DarEngine.analyze(text, {
           removeStopwords: optStop.checked,
@@ -196,10 +234,14 @@
           diacritics:      optDia.checked
         });
 
-        if (!currentTitle) currentTitle = "Analyse du " + new Date().toLocaleDateString("fr-FR");
+        if (!result.words.length) {
+          toast("Aucun mot arabe détecté dans ce texte", true);
+          return;
+        }
 
+        if (!currentTitle) currentTitle = "Analyse du " + new Date().toLocaleDateString("fr-FR");
         currentResult  = result;
-        currentExports = window.DarEngine.buildExports(result, { title: currentTitle });
+        currentExports = null;   // recalculé à la demande
 
         renderStats(result);
         renderCoverage(result);
@@ -212,16 +254,17 @@
         resultsMeta.hidden = false;
         emptyState.hidden = true;
 
-        toast(result.stats.unique + " mots uniques trouvés ✦");
+        toast(result.stats.unique.toLocaleString("fr-FR") + " mots uniques ✦");
         resultsMeta.scrollIntoView({ behavior: "smooth", block: "nearest" });
       } catch (e) {
         console.error(e);
-        toast("Erreur pendant l'analyse");
+        toast("Erreur pendant l'analyse — réessaie", true);
       } finally {
+        hideLoader();
         btnAnalyze.classList.remove("processing");
         btnAnalyze.textContent = "Analyser le texte";
       }
-    }, 30);
+    });
   }
 
   function renderStats(r) {
@@ -245,9 +288,9 @@
   }
 
   /* ============================================================
-     FILTRE + TRI + PAGINATION
+     FILTRE + TRI + PAGINATION  (tri rapide, sans localeCompare)
      ============================================================ */
-  searchIn.addEventListener("input", debounce(applyFilterSort, 180));
+  searchIn.addEventListener("input", debounce(applyFilterSort, 200));
   sortSel.addEventListener("change", applyFilterSort);
   loadMore.addEventListener("click", renderMore);
 
@@ -260,9 +303,9 @@
 
     arr = arr.slice();
     switch (sortSel.value) {
-      case "freq-asc": arr.sort((a, b) => a.count - b.count || a.word.localeCompare(b.word, "ar")); break;
-      case "alpha":    arr.sort((a, b) => a.word.localeCompare(b.word, "ar")); break;
-      default:         arr.sort((a, b) => b.count - a.count || a.word.localeCompare(b.word, "ar"));
+      case "freq-asc": arr.sort((a, b) => a.count - b.count || cmp(a.word, b.word)); break;
+      case "alpha":    arr.sort((a, b) => cmp(a.word, b.word)); break;
+      default:         arr.sort((a, b) => b.count - a.count || cmp(a.word, b.word));
     }
 
     view = arr;
@@ -270,7 +313,7 @@
     resultsList.innerHTML = "";
     renderMore();
 
-    resultsMeta.textContent = view.length + " mot(s)" +
+    resultsMeta.textContent = view.length.toLocaleString("fr-FR") + " mot(s)" +
       (view.length > PAGE ? ` · ${PAGE} affichés` : "") +
       (q ? ` · « ${q} »` : "");
   }
@@ -303,7 +346,7 @@
     resultsList.appendChild(frag);
     shown += slice.length;
     loadMore.hidden = shown >= view.length;
-    loadMore.textContent = `Afficher plus (${view.length - shown} restants)`;
+    loadMore.textContent = `Afficher plus (${(view.length - shown).toLocaleString("fr-FR")} restants)`;
   }
 
   function toggleVariants(li, w) {
@@ -316,21 +359,39 @@
   }
 
   /* ============================================================
-     EXPORTS
+     EXPORTS  (calcul à la demande pour ne pas ralentir l'analyse)
      ============================================================ */
-  function handleExport(act) {
-    if (!currentExports) { toast("Lance une analyse d'abord"); return; }
-    if (act === "copy") {
-      copyText(currentExports.text, "Liste complète copiée 📋");
-    } else if (act === "csv") {
-      download(currentExports.csv, slug(currentTitle) + ".csv", "text/csv;charset=utf-8");
-      toast("CSV téléchargé ⬇");
-    } else if (act === "json") {
-      download(currentExports.json, slug(currentTitle) + ".json", "application/json");
-      toast("JSON téléchargé ⬇");
-    } else if (act === "save") {
-      saveAnalysis();
+  function ensureExports() {
+    if (!currentExports && currentResult) {
+      currentExports = window.DarEngine.buildExports(currentResult, { title: currentTitle });
     }
+    return currentExports;
+  }
+
+  function handleExport(act) {
+    if (!currentResult) { toast("Lance une analyse d'abord", true); return; }
+    showLoader("Préparation…");
+    runHeavy(() => {
+      try {
+        const ex = ensureExports();
+        if (act === "copy") {
+          copyText(ex.text, "Liste complète copiée 📋");
+        } else if (act === "csv") {
+          download(ex.csv, slug(currentTitle) + ".csv", "text/csv;charset=utf-8");
+          toast("CSV téléchargé ⬇");
+        } else if (act === "json") {
+          download(ex.json, slug(currentTitle) + ".json", "application/json");
+          toast("JSON téléchargé ⬇");
+        } else if (act === "save") {
+          saveAnalysis();
+        }
+      } catch (e) {
+        console.error(e);
+        toast("Erreur pendant l'export", true);
+      } finally {
+        hideLoader();
+      }
+    });
   }
 
   function copyText(str, okMsg) {
@@ -348,7 +409,7 @@
     ta.value = str; ta.style.position = "fixed"; ta.style.opacity = "0";
     document.body.appendChild(ta); ta.select();
     try { document.execCommand("copy"); toast(okMsg); }
-    catch (e) { toast("Copie impossible — sélectionne à la main"); }
+    catch (e) { toast("Copie impossible — sélectionne à la main", true); }
     document.body.removeChild(ta);
   }
 
@@ -386,7 +447,7 @@
       toast("Analyse sauvegardée 💾");
       renderSaved();
     } catch (e) {
-      toast("Stockage plein — supprime d'anciennes analyses");
+      toast("Stockage plein — supprime d'anciennes analyses", true);
     }
   }
 
@@ -430,7 +491,7 @@
       words: a.words.map(w => ({ ...w, display: w.display || w.word, variantList: w.variantList || [w.word] })),
       stats: a.stats
     };
-    currentExports = window.DarEngine.buildExports(currentResult, { title: a.title });
+    currentExports = null;
     renderStats(currentResult);
     renderCoverage(currentResult);
     applyFilterSort();
@@ -465,11 +526,12 @@
   /* ============================================================
      Utilitaires
      ============================================================ */
-  function toast(msg) {
+  function toast(msg, isErr) {
     toastEl.textContent = msg;
+    toastEl.classList.toggle("err", !!isErr);
     toastEl.classList.add("show");
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => toastEl.classList.remove("show"), 2200);
+    toast._t = setTimeout(() => toastEl.classList.remove("show"), isErr ? 3200 : 2200);
   }
 
   function animateNum(el, target) {
