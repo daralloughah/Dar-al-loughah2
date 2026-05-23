@@ -1,16 +1,13 @@
 /* ============================================================
-   DAR AL LOUGHAH — app.js  (JS 3/3)
-   Interface : analyse, classement, recherche, tri, pagination,
-   exports (copier / CSV / JSON), sauvegarde locale, variantes.
-   Dépend de : stopwords.js, engine.js
+   DAR AL LOUGHAH — app.js  (v3 : affiche la forme exacte)
+   Dépend de : stopwords.js, engine.js (, pdfreader.js)
    ============================================================ */
 (function () {
   "use strict";
 
-  const PAGE = 60;                 // mots affichés par "page"
-  const LS_KEY = "dar_analyses_v1"; // clé localStorage
+  const PAGE = 60;
+  const LS_KEY = "dar_analyses_v1";
 
-  /* ---------- Références DOM ---------- */
   const $ = (id) => document.getElementById(id);
   const pasteArea  = $("pasteArea");
   const fileInput  = $("fileInput");
@@ -33,16 +30,12 @@
   const loadMore   = $("loadMore");
   const emptyState = $("emptyState");
 
-  /* ---------- État ---------- */
-  let currentResult = null;   // résultat brut de DarEngine.analyze
-  let currentExports = null;  // {text, csv, json}
-  let view = [];              // mots filtrés + triés (affichés)
-  let shown = 0;              // combien affichés
+  let currentResult = null;
+  let currentExports = null;
+  let view = [];
+  let shown = 0;
   let currentTitle = "";
 
-  /* ============================================================
-     INJECTION : styles + UI supplémentaire (export, couverture…)
-     ============================================================ */
   injectStyles();
   const coverBanner = injectCoverageBanner();
   const exportBar   = injectExportBar();
@@ -128,7 +121,6 @@
     el.className = "saved-box";
     el.hidden = true;
     el.innerHTML = `<h3>Mes analyses sauvegardées</h3><div id="savedList"></div>`;
-    // Placé juste avant le bloc de stats
     statsBlock.insertAdjacentElement("beforebegin", el);
     return el;
   }
@@ -141,12 +133,42 @@
   }
 
   /* ============================================================
-     LECTURE FICHIER .txt
+     LECTURE FICHIER .txt / .pdf
      ============================================================ */
   fileInput.addEventListener("change", () => {
     const f = fileInput.files[0];
     if (!f) return;
-    currentTitle = f.name.replace(/\.txt$/i, "");
+    currentTitle = f.name.replace(/\.(txt|pdf)$/i, "");
+
+    const isPdf = /\.pdf$/i.test(f.name) || f.type === "application/pdf";
+
+    if (isPdf) {
+      if (!window.DarPDF) { toast("Module PDF non chargé"); return; }
+      btnAnalyze.classList.add("processing");
+      fileName.textContent = f.name + " — extraction…";
+
+      window.DarPDF.extractText(f, (page, total) => {
+        fileName.textContent = `${f.name} — page ${page}/${total}…`;
+      }).then((text) => {
+        pasteArea.value = text;
+        btnAnalyze.classList.remove("processing");
+        if (!text.trim()) {
+          fileName.textContent = f.name + " — aucun texte trouvé";
+          toast("PDF scanné ? Aucun texte (OCR nécessaire)");
+        } else {
+          fileName.textContent =
+            `${f.name} ✓ (${text.length.toLocaleString("fr-FR")} caractères)`;
+          toast("PDF lu ✓ — clique sur Analyser");
+        }
+      }).catch((err) => {
+        console.error(err);
+        btnAnalyze.classList.remove("processing");
+        fileName.textContent = f.name + " — échec de lecture";
+        toast("Impossible de lire ce PDF");
+      });
+      return;
+    }
+
     fileName.textContent = f.name;
     const reader = new FileReader();
     reader.onload = () => { pasteArea.value = reader.result; };
@@ -166,7 +188,6 @@
     btnAnalyze.classList.add("processing");
     btnAnalyze.textContent = "Analyse en cours…";
 
-    // setTimeout : laisse l'UI se rafraîchir avant le calcul
     setTimeout(() => {
       const result = window.DarEngine.analyze(text, {
         removeStopwords: optStop.checked,
@@ -181,9 +202,8 @@
 
       renderStats(result);
       renderCoverage(result);
-      applyFilterSort();      // remplit view + rend la 1re page
+      applyFilterSort();
 
-      // Affiche les zones
       statsBlock.hidden = false;
       coverBanner.style.display = "flex";
       exportBar.style.display = "flex";
@@ -199,9 +219,6 @@
     }, 30);
   }
 
-  /* ============================================================
-     RENDU : stats + couverture
-     ============================================================ */
   function renderStats(r) {
     animateNum(statTotal,  r.stats.totalRaw);
     animateNum(statUnique, r.stats.unique);
@@ -234,9 +251,9 @@
     const q = searchIn.value.trim();
     let arr = currentResult.words;
 
-    if (q) arr = arr.filter(w => w.word.includes(q));
+    if (q) arr = arr.filter(w => w.word.includes(q) || (w.display && w.display.includes(q)));
 
-    arr = arr.slice(); // copie avant tri
+    arr = arr.slice();
     switch (sortSel.value) {
       case "freq-asc": arr.sort((a, b) => a.count - b.count || a.word.localeCompare(b.word, "ar")); break;
       case "alpha":    arr.sort((a, b) => a.word.localeCompare(b.word, "ar")); break;
@@ -267,11 +284,10 @@
 
       li.innerHTML =
         `<span class="word-rank">${w.rank}</span>` +
-        `<span class="word-text" dir="rtl">${w.word}${vhint}</span>` +
+        `<span class="word-text" dir="rtl">${w.display || w.word}${vhint}</span>` +
         `<span class="word-meta"><span class="word-count">${w.count}</span>` +
         `<i class="word-bar"><i style="width:${pct}%"></i></i></span>`;
 
-      // Clic → afficher/masquer les variantes fusionnées
       if (w.variants > 1) {
         li.addEventListener("click", () => toggleVariants(li, w));
       }
@@ -289,17 +305,17 @@
     if (existing) { existing.remove(); return; }
     const div = document.createElement("div");
     div.className = "word-variants";
-    div.textContent = "Formes fusionnées : " + w.variantList.join("، ");
+    div.textContent = "Formes rencontrées : " + w.variantList.join("، ");
     li.appendChild(div);
   }
 
   /* ============================================================
-     EXPORTS : copier / CSV / JSON / sauvegarder
+     EXPORTS
      ============================================================ */
   function handleExport(act) {
     if (!currentExports) { toast("Lance une analyse d'abord"); return; }
     if (act === "copy") {
-      copyText(currentExports.text, "Résultat complet copié 📋");
+      copyText(currentExports.text, "Liste complète copiée 📋");
     } else if (act === "csv") {
       download(currentExports.csv, slug(currentTitle) + ".csv", "text/csv;charset=utf-8");
       toast("CSV téléchargé ⬇");
@@ -341,7 +357,7 @@
   }
 
   /* ============================================================
-     SAUVEGARDE LOCALE (localStorage, sans serveur)
+     SAUVEGARDE LOCALE
      ============================================================ */
   function saveAnalysis() {
     if (!currentResult) return;
@@ -353,7 +369,7 @@
       options: currentResult.options,
       stats: currentResult.stats,
       words: currentResult.words.map(w => ({
-        rank: w.rank, word: w.word, count: w.count,
+        rank: w.rank, word: w.word, display: w.display, count: w.count,
         share: w.share, variants: w.variants, variantList: w.variantList
       }))
     };
@@ -405,7 +421,7 @@
     currentTitle = a.title;
     currentResult = {
       options: a.options, generatedAt: a.date,
-      words: a.words.map(w => ({ ...w, variantList: w.variantList || [w.word] })),
+      words: a.words.map(w => ({ ...w, display: w.display || w.word, variantList: w.variantList || [w.word] })),
       stats: a.stats
     };
     currentExports = window.DarEngine.buildExports(currentResult, { title: a.title });
@@ -430,7 +446,7 @@
   }
 
   /* ============================================================
-     NAVIGATION BASSE (les autres écrans arrivent ensuite)
+     NAVIGATION BASSE
      ============================================================ */
   document.querySelectorAll(".nav-item").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -451,8 +467,7 @@
   }
 
   function animateNum(el, target) {
-    const dur = 600, t0 = performance.now();
-    const start = 0;
+    const dur = 600, t0 = performance.now(), start = 0;
     function step(now) {
       const p = Math.min(1, (now - t0) / dur);
       const eased = 1 - Math.pow(1 - p, 3);
@@ -475,6 +490,5 @@
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
-  /* ---------- Démarrage ---------- */
   renderSaved();
 })();
