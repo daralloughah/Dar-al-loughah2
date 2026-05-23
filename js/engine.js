@@ -1,195 +1,121 @@
 /* ============================================================
-   DAR AL LOUGHAH — engine.js  (JS 2/3)
-   Moteur d'analyse de texte arabe — 100% local, déterministe.
-   Fonctions pures exposées via window.DarEngine
+   DAR AL LOUGHAH — engine.js  (v3 : mots entiers + forme exacte)
+   100% local, déterministe. API : window.DarEngine
    ============================================================ */
 (function () {
   "use strict";
 
-  /* ------------------------------------------------------------
-     1) PLAGES UNICODE ARABES
-     ------------------------------------------------------------ */
-  // Harakat / tachkîl / signes coraniques (à supprimer)
+  // Harakat / tachkîl / signes (supprimés UNIQUEMENT dans normalize)
   const RE_TASHKEEL = /[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED]/g;
-  // Tatweel ـــ (allongement décoratif)
   const RE_TATWEEL  = /\u0640/g;
-  // Tout ce qui n'est PAS une lettre arabe → séparateur
-  const RE_NOT_ARABIC = /[^\u0621-\u063A\u0641-\u064A\u0671\u0649\u0629]+/g;
+  // On GARDE lettres + harakat ; tout le reste est un séparateur.
+  const RE_NOT_ARABIC = /[^\u0621-\u065F\u0670\u0671]+/g;
 
-  /* ------------------------------------------------------------
-     2) NORMALISATION  (le cœur, c'est ça qui évite les faux doublons)
-     opts = {
-       diacritics:      true,  // retirer harakat
-       tatweel:         true,  // retirer ـ
-       alef:            true,  // أ إ آ ٱ → ا
-       ya:              true,  // ى → ي
-       hamza:           true,  // ؤ ئ ء → forme simple
-       taMarbuta:       false, // ة → ه  (désactivé par défaut : change le sens)
-       article:         false  // retirer ال initial
-     }
-     ------------------------------------------------------------ */
+  /* --- Normalisation : produit la CLÉ de comptage (sans harakat) --- */
   function normalize(word, opts) {
     let w = word;
-
     if (opts.diacritics) w = w.replace(RE_TASHKEEL, "");
     if (opts.tatweel)    w = w.replace(RE_TATWEEL, "");
-
-    if (opts.alef) {
-      w = w.replace(/[\u0622\u0623\u0625\u0671]/g, "\u0627"); // آأإٱ → ا
-    }
+    if (opts.alef)  w = w.replace(/[\u0622\u0623\u0625\u0671]/g, "\u0627");
     if (opts.hamza) {
-      w = w.replace(/[\u0624]/g, "\u0648");  // ؤ → و
-      w = w.replace(/[\u0626]/g, "\u064A");  // ئ → ي
-      w = w.replace(/\u0621/g, "");          // ء isolé → supprimé
+      w = w.replace(/\u0624/g, "\u0648");
+      w = w.replace(/\u0626/g, "\u064A");
+      w = w.replace(/\u0621/g, "");
     }
-    if (opts.ya) {
-      w = w.replace(/\u0649/g, "\u064A");     // ى → ي
-    }
-    if (opts.taMarbuta) {
-      w = w.replace(/\u0629/g, "\u0647");     // ة → ه
-    }
-    if (opts.article && w.length > 3 && w.startsWith("\u0627\u0644")) {
-      w = w.slice(2);                          // retire ال initial
-    }
+    if (opts.ya) w = w.replace(/\u0649/g, "\u064A");
+    if (opts.taMarbuta) w = w.replace(/\u0629/g, "\u0647");
+    if (opts.article && w.length > 3 && w.startsWith("\u0627\u0644")) w = w.slice(2);
     return w.trim();
   }
 
-  /* ------------------------------------------------------------
-     3) TOKENIZATION  (découpe le texte en mots arabes)
-     Retourne un tableau de mots BRUTS (non normalisés).
-     ------------------------------------------------------------ */
+  /* --- Découpe en mots ENTIERS (harakat conservées ici) --- */
   function tokenize(rawText) {
     if (!rawText) return [];
-    // On remplace tout séparateur (ponctuation, chiffres, latin, retours
-    // ligne, ponctuation arabe ، ؛ ؟ …) par une espace, puis on découpe.
     return rawText
+      .normalize("NFKC")
       .replace(RE_NOT_ARABIC, " ")
       .split(/\s+/)
       .filter(Boolean);
   }
 
-  /* ------------------------------------------------------------
-     4) ANALYSE COMPLÈTE
-     Retourne un objet riche, prêt pour l'affichage et l'export.
-     ------------------------------------------------------------ */
+  /* --- Analyse complète --- */
   function analyze(rawText, options) {
     const opts = Object.assign({
       diacritics: true, tatweel: true, alef: true, ya: true,
       hamza: true, taMarbuta: false, article: false,
-      removeStopwords: true, minLength: 1
+      removeStopwords: false, minLength: 1
     }, options || {});
 
     const stopwords = window.AR_STOPWORDS || new Set();
-
-    // a) Tokens bruts
     const rawTokens = tokenize(rawText);
     const totalRaw = rawTokens.length;
 
-    // b) Comptage normalisé via Map (exact, ordre d'insertion conservé)
-    //    On garde aussi la 1re forme rencontrée + l'ensemble des variantes
-    //    fusionnées (utile : montre "الصلاة" regroupe الصلاه, صلاة...).
-    const map = new Map(); // clé normalisée → {count, display, variants:Set, first}
-    let keptTotal = 0;     // total des occurrences gardées (après filtres)
+    // clé normalisée -> { count, forms:Map(formeOriginale->n), first }
+    const map = new Map();
+    let keptTotal = 0;
 
     for (let i = 0; i < rawTokens.length; i++) {
-      const raw = rawTokens[i];
+      const raw  = rawTokens[i];
       const norm = normalize(raw, opts);
-
-      if (!norm) continue;
-      if (norm.length < opts.minLength) continue;
+      if (!norm || norm.length < opts.minLength) continue;
       if (opts.removeStopwords && stopwords.has(norm)) continue;
 
       keptTotal++;
-
-      if (map.has(norm)) {
-        const e = map.get(norm);
-        e.count++;
-        e.variants.add(raw);
-      } else {
-        map.set(norm, {
-          word: norm,
-          display: norm,          // forme d'affichage (normalisée, propre)
-          count: 1,
-          variants: new Set([raw]),
-          first: i                // position de 1re apparition
-        });
-      }
+      let e = map.get(norm);
+      if (!e) { e = { word: norm, count: 0, forms: new Map(), first: i }; map.set(norm, e); }
+      e.count++;
+      e.forms.set(raw, (e.forms.get(raw) || 0) + 1);
     }
 
-    // c) Tableau trié par occurrence décroissante, puis alpha
-    const words = Array.from(map.values()).map(e => ({
-      word: e.word,
-      count: e.count,
-      variants: e.variants.size,
-      variantList: Array.from(e.variants),
-      first: e.first
-    }));
-
-    words.sort((a, b) =>
-      b.count - a.count || a.word.localeCompare(b.word, "ar")
-    );
-
-    // d) Rang + part en % du total gardé
-    words.forEach((w, idx) => {
-      w.rank = idx + 1;
-      w.share = keptTotal ? (w.count / keptTotal) * 100 : 0;
+    // Construit la liste : display = forme originale (vocalisée) la + fréquente
+    const words = Array.from(map.values()).map(e => {
+      let best = e.word, bestN = -1;
+      const formList = [];
+      e.forms.forEach((n, form) => {
+        formList.push(form);
+        if (n > bestN) { bestN = n; best = form; }
+      });
+      return {
+        word: e.word,            // clé normalisée (recherche / fusion)
+        display: best,           // FORME EXACTE affichée
+        count: e.count,
+        variants: e.forms.size,
+        variantList: formList,
+        first: e.first
+      };
     });
 
-    // e) STATISTIQUES utiles
-    const unique  = words.length;
-    const hapax   = words.filter(w => w.count === 1).length; // mots vus 1× seulement
+    words.sort((a, b) => b.count - a.count || a.word.localeCompare(b.word, "ar"));
+    words.forEach((w, i) => { w.rank = i + 1; w.share = keptTotal ? (w.count / keptTotal) * 100 : 0; });
+
+    const unique = words.length;
+    const hapax  = words.filter(w => w.count === 1).length;
     const maxCount = words.length ? words[0].count : 0;
-
-    // Richesse lexicale (Type-Token Ratio) : mots uniques / mots gardés
-    const ttr = keptTotal ? (unique / keptTotal) : 0;
-
-    // Couverture : combien de mots-vedettes couvrent X% du texte ?
-    //  → cœur de l'apprentissage : "apprends ces N mots = tu lis Y% du matn"
+    const ttr = keptTotal ? unique / keptTotal : 0;
     const coverage = buildCoverage(words, keptTotal);
-
-    // Bandes de fréquence (pour un mini-graphe / filtres)
     const bands = {
       tresFrequent: words.filter(w => w.count >= 20).length,
       frequent:     words.filter(w => w.count >= 5 && w.count < 20).length,
       moyen:        words.filter(w => w.count >= 2 && w.count < 5).length,
       rare:         hapax
     };
-
-    // Longueur moyenne des mots (en caractères)
-    const avgLen = unique
-      ? (words.reduce((s, w) => s + w.word.length, 0) / unique)
-      : 0;
+    const avgLen = unique ? words.reduce((s, w) => s + w.word.length, 0) / unique : 0;
 
     return {
-      options: opts,
-      generatedAt: new Date().toISOString(),
-      words,                         // ← le classement complet
+      options: opts, generatedAt: new Date().toISOString(), words,
       stats: {
-        totalRaw,                    // mots dans le texte (avant filtre)
-        keptTotal,                   // mots gardés (après stopwords/filtres)
-        removed: totalRaw - keptTotal,
-        unique,                      // mots uniques (le "vocabulaire")
-        hapax,                       // mots apparaissant 1 seule fois
-        maxCount,
-        avgLen: round(avgLen, 1),
-        ttr: round(ttr * 100, 1),    // richesse lexicale en %
-        bands,
-        coverage                     // {p50, p80, p90} = nb de mots pour couvrir 50/80/90%
+        totalRaw, keptTotal, removed: totalRaw - keptTotal, unique, hapax,
+        maxCount, avgLen: round(avgLen, 1), ttr: round(ttr * 100, 1), bands, coverage
       }
     };
   }
 
-  /* ------------------------------------------------------------
-     5) COUVERTURE  (combien de mots pour lire X% du texte)
-     ------------------------------------------------------------ */
-  function buildCoverage(sortedWords, keptTotal) {
-    const targets = { p50: 50, p80: 80, p90: 90, p95: 95 };
+  function buildCoverage(sorted, keptTotal) {
     const res = { p50: 0, p80: 0, p90: 0, p95: 0 };
     if (!keptTotal) return res;
-
     let cum = 0;
-    for (let i = 0; i < sortedWords.length; i++) {
-      cum += sortedWords[i].count;
+    for (let i = 0; i < sorted.length; i++) {
+      cum += sorted[i].count;
       const pct = (cum / keptTotal) * 100;
       if (!res.p50 && pct >= 50) res.p50 = i + 1;
       if (!res.p80 && pct >= 80) res.p80 = i + 1;
@@ -199,70 +125,39 @@
     return res;
   }
 
-  /* ------------------------------------------------------------
-     6) EXPORTS  (3 formats prêts à copier/télécharger)
-     ------------------------------------------------------------ */
+  /* --- Exports prêts à copier / télécharger --- */
   function buildExports(result, meta) {
-    const m = meta || {};
-    const stamp = new Date().toLocaleString("fr-FR");
-    const title = m.title || "Analyse Dar Al Loughah";
+    const title = (meta && meta.title) || "Analyse Dar Al Loughah";
+    const s = result.stats;
 
-    /* --- a) Texte lisible (parfait pour coller n'importe où) --- */
-    let text = "";
-    text += "═══════════════════════════════════════\n";
-    text += "  " + title + "\n";
-    text += "  " + stamp + "\n";
-    text += "═══════════════════════════════════════\n\n";
-    text += "Mots au total : " + result.stats.totalRaw + "\n";
-    text += "Mots gardés   : " + result.stats.keptTotal + "\n";
-    text += "Mots uniques  : " + result.stats.unique + "\n";
-    text += "Mots rares (1×): " + result.stats.hapax + "\n";
-    text += "Richesse lex. : " + result.stats.ttr + " %\n";
-    text += "Couverture    : " + result.stats.coverage.p80 +
-            " mots = 80% du texte\n\n";
-    text += "RANG\tMOT\tOCCUR.\tPART %\n";
-    text += "───────────────────────────────────────\n";
+    // a) LISTE PROPRE (le "Tout copier") : mot ⟶ occurrences, classé
+    let text = "دار اللغة · " + title + "\n";
+    text += s.unique + " mots uniques · " + s.totalRaw + " mots au total\n";
+    text += "────────────────────────\n";
     result.words.forEach(w => {
-      text += w.rank + "\t" + w.word + "\t" + w.count + "\t" +
-              round(w.share, 2) + "%\n";
+      text += w.display + " \u2014 " + w.count + "\n";   // ex:  الْحَمْدُ — 412
     });
 
-    /* --- b) CSV (ouvrable dans Excel / Sheets) --- */
-    // BOM \uFEFF pour qu'Excel lise l'arabe correctement
+    // b) CSV (Excel/Sheets, BOM pour l'arabe)
     let csv = "\uFEFFrang,mot,occurrences,part_pourcent,variantes\n";
     result.words.forEach(w => {
-      const variants = w.variantList.join(" | ").replace(/"/g, '""');
-      csv += `${w.rank},"${w.word}",${w.count},${round(w.share, 2)},"${variants}"\n`;
+      const v = w.variantList.join(" | ").replace(/"/g, '""');
+      csv += `${w.rank},"${w.display}",${w.count},${round(w.share, 2)},"${v}"\n`;
     });
 
-    /* --- c) JSON (pour réimporter / construire des thèmes plus tard) --- */
+    // c) JSON (pour rebâtir des thèmes plus tard)
     const json = JSON.stringify({
-      title, generatedAt: result.generatedAt,
-      options: result.options, stats: result.stats,
+      title, generatedAt: result.generatedAt, options: result.options, stats: s,
       words: result.words.map(w => ({
-        rank: w.rank, word: w.word, count: w.count,
-        share: round(w.share, 3), variants: w.variantList
+        rank: w.rank, word: w.word, display: w.display,
+        count: w.count, share: round(w.share, 3), variants: w.variantList
       }))
     }, null, 2);
 
     return { text, csv, json };
   }
 
-  /* ------------------------------------------------------------
-     Utilitaires
-     ------------------------------------------------------------ */
-  function round(n, d) {
-    const f = Math.pow(10, d || 0);
-    return Math.round(n * f) / f;
-  }
+  function round(n, d) { const f = Math.pow(10, d || 0); return Math.round(n * f) / f; }
 
-  /* ------------------------------------------------------------
-     API PUBLIQUE
-     ------------------------------------------------------------ */
-  window.DarEngine = {
-    normalize,
-    tokenize,
-    analyze,
-    buildExports
-  };
+  window.DarEngine = { normalize, tokenize, analyze, buildExports };
 })();
