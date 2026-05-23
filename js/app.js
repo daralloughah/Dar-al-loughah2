@@ -1,5 +1,5 @@
 /* ============================================================
-   DAR AL LOUGHAH — app.js  (v3 : affiche la forme exacte)
+   DAR AL LOUGHAH — app.js  (v4 : correctif perf + forme exacte)
    Dépend de : stopwords.js, engine.js (, pdfreader.js)
    ============================================================ */
 (function () {
@@ -189,33 +189,38 @@
     btnAnalyze.textContent = "Analyse en cours…";
 
     setTimeout(() => {
-      const result = window.DarEngine.analyze(text, {
-        removeStopwords: optStop.checked,
-        article:         optArticle.checked,
-        diacritics:      optDia.checked
-      });
+      try {
+        const result = window.DarEngine.analyze(text, {
+          removeStopwords: optStop.checked,
+          article:         optArticle.checked,
+          diacritics:      optDia.checked
+        });
 
-      if (!currentTitle) currentTitle = "Analyse du " + new Date().toLocaleDateString("fr-FR");
+        if (!currentTitle) currentTitle = "Analyse du " + new Date().toLocaleDateString("fr-FR");
 
-      currentResult  = result;
-      currentExports = window.DarEngine.buildExports(result, { title: currentTitle });
+        currentResult  = result;
+        currentExports = window.DarEngine.buildExports(result, { title: currentTitle });
 
-      renderStats(result);
-      renderCoverage(result);
-      applyFilterSort();
+        renderStats(result);
+        renderCoverage(result);
+        applyFilterSort();
 
-      statsBlock.hidden = false;
-      coverBanner.style.display = "flex";
-      exportBar.style.display = "flex";
-      toolbar.hidden = false;
-      resultsMeta.hidden = false;
-      emptyState.hidden = true;
+        statsBlock.hidden = false;
+        coverBanner.style.display = "flex";
+        exportBar.style.display = "flex";
+        toolbar.hidden = false;
+        resultsMeta.hidden = false;
+        emptyState.hidden = true;
 
-      btnAnalyze.classList.remove("processing");
-      btnAnalyze.textContent = "Analyser le texte";
-
-      toast(result.stats.unique + " mots uniques trouvés ✦");
-      resultsMeta.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        toast(result.stats.unique + " mots uniques trouvés ✦");
+        resultsMeta.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      } catch (e) {
+        console.error(e);
+        toast("Erreur pendant l'analyse");
+      } finally {
+        btnAnalyze.classList.remove("processing");
+        btnAnalyze.textContent = "Analyser le texte";
+      }
     }, 30);
   }
 
@@ -265,8 +270,9 @@
     resultsList.innerHTML = "";
     renderMore();
 
-    resultsMeta.textContent = view.length + " mot(s) affiché(s)" +
-      (q ? ` · recherche : « ${q} »` : "");
+    resultsMeta.textContent = view.length + " mot(s)" +
+      (view.length > PAGE ? ` · ${PAGE} affichés` : "") +
+      (q ? ` · « ${q} »` : "");
   }
 
   function renderMore() {
@@ -274,10 +280,10 @@
     const slice = view.slice(shown, shown + PAGE);
     const frag = document.createDocumentFragment();
 
-    slice.forEach((w) => {
+    slice.forEach((w, i) => {
       const li = document.createElement("li");
       li.className = "word-row";
-      li.style.animationDelay = ((view.indexOf(w) % PAGE) * 8) + "ms";
+      li.style.animationDelay = ((i % PAGE) * 8) + "ms";
 
       const pct = Math.max(4, (w.count / max) * 100);
       const vhint = w.variants > 1 ? `<span class="vhint">${w.variants} formes</span>` : "";
