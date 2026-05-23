@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="fr" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a1128">
+  <title>دار اللغة — Dar Al Loughah</title>
+
+  <!-- Polices : calligraphie arabe + élégance latine -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=Amiri:wght@400;700&family=Marcellus&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+  <!-- Ciel étoilé (généré en CSS) -->
+  <div class="starfield" aria-hidden="true">
+    <div class="stars stars--small"></div>
+    <div class="stars stars--medium"></div>
+    <div class="stars stars--glow"></div>
+  </div>
+
+  <!-- Cadre type téléphone (mobile-first) -->
+  <div class="phone">
+
+    <!-- ===== EN-TÊTE ===== -->
+    <header class="app-header">
+      <span class="corner corner--tl" aria-hidden="true"></span>
+      <span class="corner corner--tr" aria-hidden="true"></span>
+
+      <div class="crescent" aria-hidden="true"></div>
+      <h1 class="brand" dir="rtl" lang="ar">دار اللغة</h1>
+      <p class="brand-sub">Analyseur de textes arabes · Isole les mots des moutoun</p>
+    </header>
+
+    <!-- ===== CONTENU PRINCIPAL ===== -->
+    <main class="screen" id="screen-analyze">
+
+      <!-- Carte : import / collage de texte -->
+      <section class="card import-card">
+        <span class="corner corner--tl" aria-hidden="true"></span>
+        <span class="corner corner--tr" aria-hidden="true"></span>
+        <span class="corner corner--bl" aria-hidden="true"></span>
+        <span class="corner corner--br" aria-hidden="true"></span>
+
+        <h2 class="card-title">Importer un texte</h2>
+
+        <textarea
+          id="pasteArea"
+          class="paste-area"
+          dir="rtl"
+          lang="ar"
+          placeholder="الصق نص المتن هنا..."
+          spellcheck="false"></textarea>
+
+        <div class="import-actions">
+          <input type="file" id="fileInput" accept=".txt,text/plain" hidden>
+          <label for="fileInput" class="btn btn--ghost" id="btnFile">
+            <span class="btn-ic">📄</span> Choisir un fichier .txt
+          </label>
+          <span class="file-name" id="fileName"></span>
+        </div>
+
+        <!-- Options de traitement -->
+        <div class="options">
+          <label class="opt">
+            <input type="checkbox" id="optStopwords" checked>
+            <span>Retirer les mots-outils <em dir="rtl" lang="ar">(في، من، على...)</em></span>
+          </label>
+          <label class="opt">
+            <input type="checkbox" id="optArticle">
+            <span>Retirer l'article <em dir="rtl" lang="ar">ال</em></span>
+          </label>
+          <label class="opt">
+            <input type="checkbox" id="optDiacritics" checked>
+            <span>Supprimer les harakat <em dir="rtl" lang="ar">(الصَّلاة → الصلاة)</em></span>
+          </label>
+        </div>
+
+        <button class="btn btn--gold" id="btnAnalyze">
+          Analyser le texte
+        </button>
+      </section>
+
+      <!-- Statistiques -->
+      <section class="stats" id="statsBlock" hidden>
+        <div class="stat">
+          <span class="stat-num" id="statTotal">0</span>
+          <span class="stat-label">Mots au total</span>
+        </div>
+        <div class="stat stat--accent">
+          <span class="stat-num" id="statUnique">0</span>
+          <span class="stat-label">Mots uniques</span>
+        </div>
+        <div class="stat">
+          <span class="stat-num" id="statKept">0</span>
+          <span class="stat-label">Après filtrage</span>
+        </div>
+      </section>
+
+      <!-- Barre de recherche + tri -->
+      <section class="toolbar" id="toolbar" hidden>
+        <input type="search" id="searchInput" class="search" dir="rtl"
+               placeholder="بحث عن كلمة...">
+        <select id="sortSelect" class="sort">
+          <option value="freq-desc">Plus fréquents</option>
+          <option value="freq-asc">Plus rares</option>
+          <option value="alpha">Ordre alphabétique</option>
+        </select>
+      </section>
+
+      <!-- Résultats -->
+      <p class="results-meta" id="resultsMeta" hidden></p>
+      <ul class="word-list" id="resultsList"></ul>
+
+      <button class="btn btn--ghost btn--more" id="loadMore" hidden>
+        Afficher plus
+      </button>
+
+      <!-- État vide -->
+      <div class="empty" id="emptyState">
+        <div class="empty-mark" aria-hidden="true">✦</div>
+        <p>Colle ou importe un texte, puis lance l'analyse pour voir apparaître la liste des mots, leur fréquence et leurs doublons fusionnés.</p>
+      </div>
+
+    </main>
+
+    <!-- ===== NAVIGATION BASSE (écrans à venir) ===== -->
+    <nav class="bottom-nav" aria-label="Navigation">
+      <button class="nav-item is-active" data-screen="analyze">
+        <span class="nav-ic">🔍</span><span>Analyse</span>
+      </button>
+      <button class="nav-item" data-screen="library" disabled>
+        <span class="nav-ic">📚</span><span>Livres</span>
+      </button>
+      <button class="nav-item" data-screen="themes" disabled>
+        <span class="nav-ic">✦</span><span>Thèmes</span>
+      </button>
+      <button class="nav-item" data-screen="profile" disabled>
+        <span class="nav-ic">👤</span><span>Profil</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- Scripts (chargés dans l'ordre) -->
+  <script defer src="./js/stopwords.js"></script>
+  <script defer src="./js/engine.js"></script>
+  <script defer src="./js/app.js"></script>
+</body>
+</html>
